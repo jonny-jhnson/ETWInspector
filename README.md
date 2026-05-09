@@ -5,7 +5,10 @@ Developed in C#, EtwInspector is easily accessible as a PowerShell module, makin
 
 ## Instructions
 ### PowerShell Gallery
-Coming soon...
+```
+PS > Install-Module EtwInspector
+```
+Module page: https://www.powershellgallery.com/packages/EtwInspector
 
 ### Import Directly
 1. Import EtwInspector via: 
