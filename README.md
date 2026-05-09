@@ -86,16 +86,24 @@ Example 3: Enumerating tracelogging providers that exist in kerberos.dll
 ```
 PS > $EnumProviders = Get-EtwProviders -ProviderType TraceLogging -FilePath C:\Windows\System32\kerberos.dll
 
-PS > $EnumProviders.TraceloggingProviders.Providers | Select ProviderName, @{n='EventCount';e={$_.Events.Count}}
+PS > $EnumProviders.TraceloggingProviders.Providers
 
-ProviderName                              EventCount
-------------                              ----------
-Microsoft.Windows.Security.Kerberos               52
-Microsoft.Windows.Security.SspCommon              52
-Microsoft.Windows.TlgAggregateInternal            52
+ProviderGUID                         ProviderName                           ProviderGroupGUID
+------------                         ------------                           -----------------
+{ad5162d8-daf0-4a25-94a8-af80668765dc} Microsoft.Windows.Security.Kerberos
+{ba2257e2-6cf5-4cea-9f8d-3df7d35ddec5} Microsoft.Windows.Security.SspCommon
+{1e988a17-2d61-403d-b300-7787790fb2cb} Microsoft.Windows.TlgAggregateInternal
+
+PS > $EnumProviders.TraceloggingProviders.Events | Select-Object -First 3 EventName, Level, KeywordHex
+
+EventName                          Level KeywordHex
+---------                          ----- ----------
+KerbAcceptSecurityContextStart         4 0x0
+KerbAcceptSecurityContextStop          4 0x0
+KerbAcquireCredentialsHandleStart      4 0x0
 ```
 
-> **TraceLogging caveat — events are not individually mapped to a provider.** TraceLogging metadata is embedded in the binary as a single blob containing every provider declared in the file followed by every event. The blob doesn't carry per-event provider IDs, and in every shipping Windows binary surveyed (1891 in System32 + drivers) events appear before providers in the stream, so the order can't be used to bind them either. As a result, every provider in a binary reports the binary's full event list. If you need a real binding, you have to do it via static analysis - the [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) IDA plugin maps `TraceLoggingWrite` call sites back to their registered provider handles and is the most practical route today.
+> **TraceLogging caveat — events are not individually mapped to a provider.** TraceLogging metadata is embedded in the binary as a single blob containing every provider declared in the file followed by every event. The blob doesn't carry per-event provider IDs, and in every shipping Windows binary surveyed (1891 in System32 + drivers) events appear before providers in the stream, so the order can't be used to bind them either. `Providers` and `Events` are returned as separate flat lists - we deliberately don't pretend to bind them. If you need a real binding, do static analysis on the binary; the [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) IDA plugin maps `TraceLoggingWrite` call sites back to their registered provider handles and is the most practical route today.
 
 `Get-EtwTraceSessions` is also another cmdlet that allows someone to query trace sessions locally and remotely. You can query regular trace sessions, trace sessions that live in a data collector, and/or both. 
 

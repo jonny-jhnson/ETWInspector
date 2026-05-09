@@ -28,17 +28,15 @@ namespace EtwInspector.Provider.Enumeration
 
     /// <summary>
     /// Holds parsed provider info (to avoid name collision with System.Diagnostics.Eventing.Reader.ProviderMetadata).
-    /// Events points at the same list as TraceLoggingSchema.Events for every
-    /// provider in the file, since the TraceLogging blob stream offers no
-    /// reliable per-event provider linkage in practice (every shipping binary
-    /// surveyed lays metadata out events-first, then providers).
+    /// Events live on TraceLoggingSchema, not here, because the ETW0 blob
+    /// doesn't carry per-event provider IDs - we cannot honestly say which
+    /// provider in a multi-provider binary owns a given event.
     /// </summary>
     public class TraceLoggingProviderMetadata
     {
         public string ProviderGUID { get; set; }
         public string ProviderName { get; set; }
         public string ProviderGroupGUID { get; set; }
-        public List<TraceLoggingEventMetadata> Events { get; set; } = new List<TraceLoggingEventMetadata>();
     }
 
     /// <summary>
@@ -402,9 +400,8 @@ namespace EtwInspector.Provider.Enumeration
         /// a flat Events list. We deliberately do not try to bind events to
         /// individual providers - in practice every shipping Windows binary
         /// surveyed lays the blob stream out events-first, then providers, so
-        /// per-event linkage is not recoverable from the stream. Each
-        /// provider's Events property points at the schema's full event list
-        /// for caller convenience.
+        /// per-event linkage is not recoverable from the stream. Use static
+        /// analysis (e.g. the TLGMapper IDA plugin) for real attribution.
         /// </summary>
         public static TraceLoggingSchema ParseTraceLoggingMetadata(string filePath)
         {
@@ -431,13 +428,6 @@ namespace EtwInspector.Provider.Enumeration
                 {
                     schema.Providers.AddRange(blockSchema.Providers);
                     schema.Events.AddRange(blockSchema.Events);
-                }
-            }
-            if (schema != null)
-            {
-                foreach (var p in schema.Providers)
-                {
-                    p.Events = schema.Events;
                 }
             }
             return schema;
