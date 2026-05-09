@@ -86,19 +86,16 @@ Example 3: Enumerating tracelogging providers that exist in kerberos.dll
 ```
 PS > $EnumProviders = Get-EtwProviders -ProviderType TraceLogging -FilePath C:\Windows\System32\kerberos.dll
 
-PS > $EnumProviders
+PS > $EnumProviders.TraceloggingProviders.Providers | Select ProviderName, @{n='EventCount';e={$_.Events.Count}}
 
-RegisteredProviders TraceloggingProviders
-------------------- ---------------------
-{}                  EtwInspector.Provider.Enumeration.TraceLoggingSchema
-
-
-PS > $EnumProviders.TraceloggingProviders
-
-FilePath                         Providers
---------                         ---------
-C:\Windows\System32\kerberos.dll {Microsoft.Windows.Security.Kerberos, Microsoft.Windows.Security.SspCommon, Microsoft.Windows.Tlg...
+ProviderName                              EventCount
+------------                              ----------
+Microsoft.Windows.Security.Kerberos               52
+Microsoft.Windows.Security.SspCommon              52
+Microsoft.Windows.TlgAggregateInternal            52
 ```
+
+> **TraceLogging caveat — events are not individually mapped to a provider.** TraceLogging metadata is embedded in the binary as a single blob containing every provider declared in the file followed by every event. The blob doesn't carry per-event provider IDs, and in every shipping Windows binary surveyed (1891 in System32 + drivers) events appear before providers in the stream, so the order can't be used to bind them either. As a result, every provider in a binary reports the binary's full event list. If you need a real binding, you have to do it via static analysis - the [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) IDA plugin maps `TraceLoggingWrite` call sites back to their registered provider handles and is the most practical route today.
 
 `Get-EtwTraceSessions` is also another cmdlet that allows someone to query trace sessions locally and remotely. You can query regular trace sessions, trace sessions that live in a data collector, and/or both. 
 
@@ -128,6 +125,8 @@ PS > Export-EtwSnapshot C:\Snapshots\baseline.json                              
 ```
 
 The snapshot captures the OS version (`Major.Minor.Build.UBR`, read from the registry), provider GUID, name, schema source, resource file path or `Sources[]` array (TraceLogging providers can be embedded in multiple binaries; `Sources` lists every file the provider was discovered in), keywords, and per-event Id, Version, Level, Opcode, Task, Keywords, Description, and Template. Providers are sorted by name; events are sorted deterministically so two snapshots of identical state produce byte-stable output.
+
+> **TraceLogging events are listed under every provider in the binary, not bound to a specific one.** The ETW0 metadata blob doesn't carry per-event provider IDs, so when a binary declares multiple TraceLogging providers all of them report the binary's full event list in the snapshot. To get a real per-event binding, do static analysis on the binary - [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) is an IDA plugin that walks `TraceLoggingWrite` call sites and recovers the actual mapping.
 
 #### Compare-EtwSnapshot
 Loads two snapshots (A and B) and returns a structured diff. Both `.json` and `.ndjson`/`.jsonl` are accepted — and the two paths can use different formats (e.g. compare a legacy `.json` baseline against a new `.ndjson` snapshot).
