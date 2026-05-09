@@ -109,20 +109,22 @@ C:\Windows\System32\kerberos.dll {Microsoft.Windows.Security.Kerberos, Microsoft
 #### Export-EtwSnapshot
 Serializes Manifest, MOF, and TraceLogging providers on the local machine to a snapshot file. (WPP, the fourth ETW provider type, is not yet supported. MOF *providers* are listed but their *events* don't populate today - their event metadata isn't reliably present in WMI.)
 
+**Default scan paths for TraceLogging** — TraceLogging metadata is compiled into individual binaries (DLLs/EXEs/SYS files) rather than registered with the OS, so finding it requires scanning files for the embedded `ETW0` signature. By default `Export-EtwSnapshot` walks:
+
+- `C:\Windows\System32` (`*.dll`, `*.exe`)
+- `C:\Windows\System32\drivers` (`*.sys`)
+
+This adds roughly 30-60 seconds to the export. Use `-SkipTraceLogging` to skip the scan entirely, or `-ScanPath` to add additional directories (e.g. `C:\Program Files\YourApp`).
+
 The output format is chosen by file extension:
 - `.ndjson` or `.jsonl` — newline-delimited JSON. The first line is a header (`SchemaVersion`, `OSVersion`); each subsequent line is one full provider record. Recommended for diffing (line-based diff tools align cleanly per provider) and for stream-ingestion into a database or web service.
 - any other extension — pretty-printed JSON, one big object containing the providers array. Easier to eyeball, larger on disk, harder to diff at scale.
 
 ```
-PS > Export-EtwSnapshot C:\Snapshots\baseline.ndjson
-PS > Export-EtwSnapshot C:\Snapshots\baseline.json     # pretty JSON
-```
-
-By default the cmdlet scans `C:\Windows\System32` and `C:\Windows\System32\drivers` for binaries that embed TraceLogging providers (the only way to find them - TraceLogging metadata is compiled into individual DLLs/EXEs/SYS files rather than registered with the OS). This adds roughly 30-60 seconds to the export.
-
-```
-PS > Export-EtwSnapshot fast.ndjson -SkipTraceLogging          # Manifest+MOF only (~5s)
-PS > Export-EtwSnapshot full.ndjson -ScanPath 'C:\App'         # also scan a custom dir
+PS > Export-EtwSnapshot C:\Snapshots\baseline.ndjson                                # Manifest + MOF + TraceLogging (default)
+PS > Export-EtwSnapshot C:\Snapshots\fast.ndjson -SkipTraceLogging                  # Manifest + MOF only (~5s)
+PS > Export-EtwSnapshot C:\Snapshots\full.ndjson -ScanPath 'C:\Program Files\App'   # also scan a custom dir
+PS > Export-EtwSnapshot C:\Snapshots\baseline.json                                  # pretty JSON
 ```
 
 The snapshot captures the OS version (`Major.Minor.Build.UBR`, read from the registry), provider GUID, name, schema source, resource file path or `Sources[]` array (TraceLogging providers can be embedded in multiple binaries; `Sources` lists every file the provider was discovered in), keywords, and per-event Id, Version, Level, Opcode, Task, Keywords, Description, and Template. Providers are sorted by name; events are sorted deterministically so two snapshots of identical state produce byte-stable output.
