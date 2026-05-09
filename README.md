@@ -7,6 +7,18 @@ Developed in C#, EtwInspector is easily accessible as a PowerShell module, makin
 ### PowerShell Gallery
 ```
 PS > Install-Module EtwInspector
+PS > Import-Module EtwInspector
+PS > Get-Command -Module EtwInspector
+
+CommandType     Name                                               Version    Source
+-----------     ----                                               -------    ------
+Cmdlet          Compare-EtwSnapshot                                1.2.0      EtwInspector
+Cmdlet          Export-EtwSnapshot                                 1.2.0      EtwInspector
+Cmdlet          Get-EtwProviders                                   1.2.0      EtwInspector
+Cmdlet          Get-EtwSecurityDescriptor                          1.2.0      EtwInspector
+Cmdlet          Get-EtwTraceSessions                               1.2.0      EtwInspector
+Cmdlet          Start-EtwCapture                                   1.2.0      EtwInspector
+Cmdlet          Stop-EtwCapture                                    1.2.0      EtwInspector
 ```
 Module page: https://www.powershellgallery.com/packages/EtwInspector
 
