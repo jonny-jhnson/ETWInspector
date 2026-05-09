@@ -46,41 +46,17 @@ namespace EtwInspector.Provider.Enumeration
                 }
                 if (schema == null) continue;
 
-                // The parser returns providers and events at the schema level
-                // without an explicit linkage. Each TraceLogging binary contains
-                // a small number of providers (often one) and we treat all of
-                // its events as belonging to all of its providers, which matches
-                // how TraceLogging is laid out in practice (a binary registers
-                // its providers and emits events under them).
+                // The blob stream offers no reliable per-event provider
+                // linkage (every shipping Windows binary surveyed lays metadata
+                // out events-first, then providers). We attribute every event
+                // in the binary to every provider declared in the binary.
+                // Dedup-by-(name,fields) within each provider keeps the same
+                // event from landing twice when a provider also appears in
+                // another file.
                 if (schema.Providers == null || schema.Providers.Count == 0) continue;
 
-                // Bucket events by the parser's per-event ProviderIndex. When
-                // events are tagged (provider-first layout), they route to the
-                // exact provider they belong to. When they're orphans (-1) -
-                // some binaries lay metadata out events-first, then providers,
-                // and the blob stream offers no explicit linkage in that case
-                // - we fall back to attributing them to every provider in the
-                // binary, matching the historical behavior. The dedup key
-                // prevents the same event from being added twice to one
-                // provider on subsequent merges from other binaries.
-                var eventsByIdx = new Dictionary<int, List<TraceLoggingEventMetadata>>();
-                if (schema.Events != null)
+                foreach (var provider in schema.Providers)
                 {
-                    foreach (var e in schema.Events)
-                    {
-                        if (!eventsByIdx.TryGetValue(e.ProviderIndex, out var list))
-                        {
-                            list = new List<TraceLoggingEventMetadata>();
-                            eventsByIdx[e.ProviderIndex] = list;
-                        }
-                        list.Add(e);
-                    }
-                }
-                eventsByIdx.TryGetValue(-1, out var orphanEvents);
-
-                for (int providerIdx = 0; providerIdx < schema.Providers.Count; providerIdx++)
-                {
-                    var provider = schema.Providers[providerIdx];
                     if (string.IsNullOrEmpty(provider.ProviderName)) continue;
 
                     var guid = NormalizeGuid(provider.ProviderGUID);
@@ -103,23 +79,9 @@ namespace EtwInspector.Provider.Enumeration
                     }
                     agg.Sources.Add(file);
 
-                    // Attributable events first
-                    if (eventsByIdx.TryGetValue(providerIdx, out var providerEvents))
+                    if (schema.Events != null)
                     {
-                        foreach (var e in providerEvents)
-                        {
-                            var key = EventDedupKey(e);
-                            if (agg.SeenEventKeys.Add(key))
-                            {
-                                agg.Events.Add(ToEventSnapshot(e));
-                            }
-                        }
-                    }
-                    // Then orphan events from this binary, attributed to every
-                    // provider here. Dedup prevents duplicates within a provider.
-                    if (orphanEvents != null)
-                    {
-                        foreach (var e in orphanEvents)
+                        foreach (var e in schema.Events)
                         {
                             var key = EventDedupKey(e);
                             if (agg.SeenEventKeys.Add(key))

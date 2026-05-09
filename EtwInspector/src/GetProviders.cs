@@ -28,12 +28,17 @@ namespace EtwInspector.Provider.Enumeration
 
     /// <summary>
     /// Holds parsed provider info (to avoid name collision with System.Diagnostics.Eventing.Reader.ProviderMetadata).
+    /// Events points at the same list as TraceLoggingSchema.Events for every
+    /// provider in the file, since the TraceLogging blob stream offers no
+    /// reliable per-event provider linkage in practice (every shipping binary
+    /// surveyed lays metadata out events-first, then providers).
     /// </summary>
     public class TraceLoggingProviderMetadata
     {
         public string ProviderGUID { get; set; }
         public string ProviderName { get; set; }
         public string ProviderGroupGUID { get; set; }
+        public List<TraceLoggingEventMetadata> Events { get; set; } = new List<TraceLoggingEventMetadata>();
     }
 
     /// <summary>
@@ -50,10 +55,6 @@ namespace EtwInspector.Provider.Enumeration
         public List<byte> Extension { get; set; } = new List<byte>();
         public string EventName { get; set; }
         public List<FieldMetadata> Fields { get; set; } = new List<FieldMetadata>();
-        // Index into TraceLoggingSchema.Providers identifying which provider
-        // owns this event. The blob walker tracks the most-recently-seen
-        // provider blob; -1 means events appeared before any provider (orphans).
-        public int ProviderIndex { get; set; } = -1;
     }
 
     /// <summary>
@@ -397,10 +398,13 @@ namespace EtwInspector.Provider.Enumeration
 
         /// <summary>
         /// Looks for "ETW0" signatures and parses every TraceLogging metadata
-        /// block in the file. Each event is tagged with the index of the
-        /// provider that owns it (the most-recently-seen provider blob in the
-        /// same stream, since TraceLogging metadata interleaves provider and
-        /// event blobs in declaration order).
+        /// block in the file. Returns a schema with a flat Providers list and
+        /// a flat Events list. We deliberately do not try to bind events to
+        /// individual providers - in practice every shipping Windows binary
+        /// surveyed lays the blob stream out events-first, then providers, so
+        /// per-event linkage is not recoverable from the stream. Each
+        /// provider's Events property points at the schema's full event list
+        /// for caller convenience.
         /// </summary>
         public static TraceLoggingSchema ParseTraceLoggingMetadata(string filePath)
         {
@@ -425,15 +429,15 @@ namespace EtwInspector.Provider.Enumeration
                 }
                 else
                 {
-                    // Merge subsequent blocks into the first schema. Re-base
-                    // ProviderIndex so events keep pointing at the right provider.
-                    int providerOffset = schema.Providers.Count;
                     schema.Providers.AddRange(blockSchema.Providers);
-                    foreach (var e in blockSchema.Events)
-                    {
-                        if (e.ProviderIndex >= 0) e.ProviderIndex += providerOffset;
-                        schema.Events.Add(e);
-                    }
+                    schema.Events.AddRange(blockSchema.Events);
+                }
+            }
+            if (schema != null)
+            {
+                foreach (var p in schema.Providers)
+                {
+                    p.Events = schema.Events;
                 }
             }
             return schema;
@@ -475,7 +479,6 @@ namespace EtwInspector.Provider.Enumeration
                     }
 
                     var schema = new TraceLoggingSchema { FilePath = fullPath };
-                    int currentProviderIdx = -1;
 
                     // Read blob types until we hit 1 (_TlgBlobEnd)
                     byte blobType = br.ReadByte();
@@ -488,36 +491,22 @@ namespace EtwInspector.Provider.Enumeration
 
                             case 2: // _TlgBlobProvider
                                 schema.Providers.Add(ParseProviderBlob(br));
-                                currentProviderIdx = schema.Providers.Count - 1;
                                 break;
 
                             case 3: // _TlgBlobEvent3
-                                {
-                                    var e = ParseEvent3(br, tlgSigValIndex);
-                                    e.ProviderIndex = currentProviderIdx;
-                                    schema.Events.Add(e);
-                                }
+                                schema.Events.Add(ParseEvent3(br, tlgSigValIndex));
                                 break;
 
                             case 4: // _TlgBlobProvider3
                                 schema.Providers.Add(ParseProviderBlob3(br));
-                                currentProviderIdx = schema.Providers.Count - 1;
                                 break;
 
                             case 5: // _TlgBlobEvent2
-                                {
-                                    var e = ParseEvent2(br, tlgSigValIndex);
-                                    e.ProviderIndex = currentProviderIdx;
-                                    schema.Events.Add(e);
-                                }
+                                schema.Events.Add(ParseEvent2(br, tlgSigValIndex));
                                 break;
 
                             case 6: // _TlgBlobEvent4
-                                {
-                                    var e = ParseEvent4(br);
-                                    e.ProviderIndex = currentProviderIdx;
-                                    schema.Events.Add(e);
-                                }
+                                schema.Events.Add(ParseEvent4(br));
                                 break;
 
                             default:
