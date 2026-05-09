@@ -1026,28 +1026,71 @@ namespace EtwInspector.Provider.Enumeration
             return providerList;
         }
 
-        private void EnrichProviderWithMOFData(_PROVIDER_METADATA providerMetadata, string providerName)
+        private void SafeWriteVerbose(string message)
         {
+            try { WriteVerbose(message); }
+            catch (NotImplementedException) { /* invoked outside a pipeline */ }
+        }
+
+        private Dictionary<string, string> _mofGuidIndex;
+
+        private Dictionary<string, string> GetMofGuidIndex()
+        {
+            if (_mofGuidIndex != null) return _mofGuidIndex;
+
+            var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var guidPattern = new System.Text.RegularExpressions.Regex(
+                @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
             try
             {
                 var mofFiles = Directory.GetFiles(@"C:\Windows\System32\wbem", "*.mof", SearchOption.AllDirectories);
                 foreach (var file in mofFiles)
                 {
-                    var fileContent = File.ReadAllText(file);
-                    if (fileContent.ToLower().Contains(providerMetadata.providerGuid.ToString().ToLower()))
+                    try
                     {
-                        providerMetadata.resourceFilePath = file;
-                        break;
+                        var content = File.ReadAllText(file);
+                        foreach (System.Text.RegularExpressions.Match m in guidPattern.Matches(content))
+                        {
+                            if (!index.ContainsKey(m.Value))
+                            {
+                                index[m.Value] = file;
+                            }
+                        }
                     }
+                    catch (Exception ex)
+                    {
+                        SafeWriteVerbose($"Skipping MOF file {file}: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                SafeWriteVerbose($"Could not enumerate MOF directory: {ex.Message}");
+            }
+
+            _mofGuidIndex = index;
+            return _mofGuidIndex;
+        }
+
+        private void EnrichProviderWithMOFData(_PROVIDER_METADATA providerMetadata, string providerName)
+        {
+            try
+            {
+                var index = GetMofGuidIndex();
+                if (index.TryGetValue(providerMetadata.providerGuid, out var file))
+                {
+                    providerMetadata.resourceFilePath = file;
                 }
             }
             catch (EventLogException)
             {
-                WriteVerbose($"Could not load MOF data for provider: {providerName}.");
+                SafeWriteVerbose($"Could not load MOF data for provider: {providerName}.");
             }
             catch (Exception ex)
             {
-                WriteVerbose($"Error loading MOF data for {providerName}: {ex.Message}");
+                SafeWriteVerbose($"Error loading MOF data for {providerName}: {ex.Message}");
             }
         }
 
@@ -1059,18 +1102,18 @@ namespace EtwInspector.Provider.Enumeration
                 {
                     providerMetadata.resourceFilePath = provider.ResourceFilePath;
                     providerMetadata.eventKeywords = provider.Keywords.ToList();
-                    providerMetadata.eventMetadata = provider.Events.ToList();                    
+                    providerMetadata.eventMetadata = provider.Events.ToList();
                 }
                 providerMetadata.securityDescriptor = GetSecurityDescriptorCommand.GetEtwSecurityDescriptor(providerMetadata.providerGuid);
 
             }
             catch (EventLogException)
             {
-                WriteVerbose($"Could not load manifest for provider: {providerName}");
+                SafeWriteVerbose($"Could not load manifest for provider: {providerName}");
             }
             catch (Exception ex)
             {
-                WriteVerbose($"Error loading metadata for {providerName}: {ex.Message}");
+                SafeWriteVerbose($"Error loading metadata for {providerName}: {ex.Message}");
             }
         }
 
