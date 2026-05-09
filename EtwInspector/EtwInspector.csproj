@@ -51,6 +51,7 @@
     <Compile Include="src\CaptureEvents.cs" />
     <Compile Include="src\GetProviders.cs" />
     <Compile Include="src\Snapshot.cs" />
+    <Compile Include="src\TraceLoggingEnumeration.cs" />
     <Compile Include="src\TraceSessions.cs" />
   </ItemGroup>
   <ItemGroup>

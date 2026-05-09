@@ -11,7 +11,7 @@ namespace EtwInspector.Provider.Enumeration
 {
     public class EtwSnapshot
     {
-        public string SchemaVersion { get; set; } = "1.0";
+        public string SchemaVersion { get; set; } = "1.1";
         public string OSVersion { get; set; }
         public List<ProviderSnapshot> Providers { get; set; } = new List<ProviderSnapshot>();
     }
@@ -22,6 +22,10 @@ namespace EtwInspector.Provider.Enumeration
         public string ProviderName { get; set; }
         public string SchemaSource { get; set; }
         public string ResourceFilePath { get; set; }
+        // Populated only for TraceLogging providers, which can be embedded in
+        // multiple binaries. Sorted, deduplicated paths. Manifest/MOF use the
+        // single ResourceFilePath above and leave this null.
+        public List<string> Sources { get; set; }
         public List<KeywordSnapshot> Keywords { get; set; } = new List<KeywordSnapshot>();
         public List<EventSnapshot> Events { get; set; } = new List<EventSnapshot>();
     }
@@ -253,14 +257,18 @@ namespace EtwInspector.Provider.Enumeration
     }
 
     /// <summary>
-    /// <para type="synopsis">Export-EtwSnapshot serializes Manifest and MOF provider metadata to a JSON or NDJSON file.</para>
-    /// <para type="description">Export-EtwSnapshot enumerates all registered Manifest and MOF ETW providers on the local machine and writes them, with their events and keywords, to a snapshot file. The output format is chosen by file extension: .ndjson or .jsonl produces newline-delimited JSON (one provider per line, with a header on the first line) which diffs cleanly and streams well; any other extension produces pretty-printed JSON. Run this on two machines (or before/after an update) and feed the resulting files to Compare-EtwSnapshot to see what changed. TraceLogging providers are not included.</para>
+    /// <para type="synopsis">Export-EtwSnapshot serializes Manifest, MOF, and TraceLogging provider metadata to a JSON or NDJSON file.</para>
+    /// <para type="description">Export-EtwSnapshot enumerates ETW providers on the local machine and writes them, with their events and keywords, to a snapshot file. By default it covers all three schema sources: registered Manifest providers, MOF providers (via the WMI repository), and TraceLogging providers (by scanning binaries under C:\Windows\System32 and C:\Windows\System32\drivers for the embedded ETW0 metadata). Use -SkipTraceLogging for a fast Manifest+MOF-only export, or -ScanPath to add directories to the TraceLogging scan.</para>
+    /// <para type="description">Output format is chosen by file extension: .ndjson or .jsonl produces newline-delimited JSON (one provider per line, with a header on the first line) which diffs cleanly and streams well; any other extension produces pretty-printed JSON. Run this on two machines (or before/after an update) and feed the resulting files to Compare-EtwSnapshot to see what changed.</para>
     /// </summary>
     /// <example>
-    /// <para> PS C:\> Export-EtwSnapshot C:\snapshots\baseline.json</para>
+    /// <para> PS C:\> Export-EtwSnapshot C:\snapshots\baseline.ndjson</para>
     /// </example>
     /// <example>
-    /// <para> PS C:\> Export-EtwSnapshot C:\snapshots\baseline.ndjson</para>
+    /// <para> PS C:\> Export-EtwSnapshot C:\snapshots\fast.ndjson -SkipTraceLogging</para>
+    /// </example>
+    /// <example>
+    /// <para> PS C:\> Export-EtwSnapshot C:\snapshots\full.ndjson -ScanPath 'C:\Program Files\MyApp'</para>
     /// </example>
     [Cmdlet(VerbsData.Export, "EtwSnapshot")]
     public class ExportEtwSnapshotCommand : Cmdlet
@@ -268,6 +276,12 @@ namespace EtwInspector.Provider.Enumeration
         [Parameter(Mandatory = true, Position = 0)]
         [ValidateNotNullOrEmpty]
         public string OutputPath { get; set; }
+
+        [Parameter(Mandatory = false)]
+        public SwitchParameter SkipTraceLogging { get; set; }
+
+        [Parameter(Mandatory = false)]
+        public string[] ScanPath { get; set; }
 
         protected override void ProcessRecord()
         {
@@ -284,6 +298,25 @@ namespace EtwInspector.Provider.Enumeration
                 foreach (var p in providers)
                 {
                     snapshot.Providers.Add(SnapshotBuilder.ToSnapshot(p));
+                }
+
+                if (!SkipTraceLogging)
+                {
+                    var scanRoots = new List<string>
+                    {
+                        @"C:\Windows\System32",
+                        @"C:\Windows\System32\drivers",
+                    };
+                    if (ScanPath != null) scanRoots.AddRange(ScanPath);
+
+                    var files = new List<string>();
+                    foreach (var root in scanRoots)
+                    {
+                        files.AddRange(SafeEnumerateBinaries(root));
+                    }
+                    WriteVerbose($"TraceLogging: scanning {files.Count} files...");
+                    var tlgProviders = TraceLoggingEnumerator.Scan(files, msg => WriteVerbose(msg));
+                    snapshot.Providers.AddRange(tlgProviders);
                 }
 
                 snapshot.Providers = snapshot.Providers
@@ -345,6 +378,28 @@ namespace EtwInspector.Provider.Enumeration
                 // Fall through to Environment.OSVersion
             }
             return Environment.OSVersion.Version.ToString();
+        }
+
+        // Enumerates DLLs, EXEs, and SYSes directly under a directory, swallowing
+        // access errors (locked or restricted files). Top-level only; the OS
+        // directories we scan are flat enough that recursion isn't needed and
+        // would just add WinSxS-style noise.
+        private static IEnumerable<string> SafeEnumerateBinaries(string root)
+        {
+            if (!Directory.Exists(root)) yield break;
+            foreach (var pattern in new[] { "*.dll", "*.exe", "*.sys" })
+            {
+                string[] hits;
+                try
+                {
+                    hits = Directory.GetFiles(root, pattern, SearchOption.TopDirectoryOnly);
+                }
+                catch
+                {
+                    continue;
+                }
+                foreach (var h in hits) yield return h;
+            }
         }
     }
 

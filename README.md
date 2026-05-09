@@ -107,7 +107,7 @@ C:\Windows\System32\kerberos.dll {Microsoft.Windows.Security.Kerberos, Microsoft
 `Export-EtwSnapshot` and `Compare-EtwSnapshot` let you track changes to ETW providers over time — for example, to see what a Windows update changed about provider definitions, what new events were introduced, or which event metadata changed. Snapshot one machine (or take a snapshot before an update), snapshot another (or take a snapshot after the update), and diff the two.
 
 #### Export-EtwSnapshot
-Serializes all Manifest and MOF providers on the local machine to a snapshot file. TraceLogging providers are not included.
+Serializes Manifest, MOF, and TraceLogging providers on the local machine to a snapshot file. (WPP, the fourth ETW provider type, is not yet supported. MOF *providers* are listed but their *events* don't populate today - their event metadata isn't reliably present in WMI.)
 
 The output format is chosen by file extension:
 - `.ndjson` or `.jsonl` — newline-delimited JSON. The first line is a header (`SchemaVersion`, `OSVersion`); each subsequent line is one full provider record. Recommended for diffing (line-based diff tools align cleanly per provider) and for stream-ingestion into a database or web service.
@@ -118,7 +118,14 @@ PS > Export-EtwSnapshot C:\Snapshots\baseline.ndjson
 PS > Export-EtwSnapshot C:\Snapshots\baseline.json     # pretty JSON
 ```
 
-The snapshot captures the OS version, provider GUID, name, schema source, resource file path, keywords, and per-event Id, Version, Level, Opcode, Task, Keywords, Description, and Template. Providers are sorted by name; events within a provider are sorted by `(Id, Version)` so two snapshots of identical state produce byte-stable output.
+By default the cmdlet scans `C:\Windows\System32` and `C:\Windows\System32\drivers` for binaries that embed TraceLogging providers (the only way to find them - TraceLogging metadata is compiled into individual DLLs/EXEs/SYS files rather than registered with the OS). This adds roughly 30-60 seconds to the export.
+
+```
+PS > Export-EtwSnapshot fast.ndjson -SkipTraceLogging          # Manifest+MOF only (~5s)
+PS > Export-EtwSnapshot full.ndjson -ScanPath 'C:\App'         # also scan a custom dir
+```
+
+The snapshot captures the OS version (`Major.Minor.Build.UBR`, read from the registry), provider GUID, name, schema source, resource file path or `Sources[]` array (TraceLogging providers can be embedded in multiple binaries; `Sources` lists every file the provider was discovered in), keywords, and per-event Id, Version, Level, Opcode, Task, Keywords, Description, and Template. Providers are sorted by name; events are sorted deterministically so two snapshots of identical state produce byte-stable output.
 
 #### Compare-EtwSnapshot
 Loads two snapshots (A and B) and returns a structured diff. Both `.json` and `.ndjson`/`.jsonl` are accepted — and the two paths can use different formats (e.g. compare a legacy `.json` baseline against a new `.ndjson` snapshot).
@@ -182,6 +189,11 @@ Thank you to the following people who were willing to test this tool and provide
 * XmlDoc2CmdletDoc
 
 ## Release Notes
+
+v1.2.0
+* `Export-EtwSnapshot` now includes TraceLogging providers by default. Scans `C:\Windows\System32` and `C:\Windows\System32\drivers` for the embedded ETW0 metadata, merges the same provider across the binaries it appears in, and records every source path on a new `Sources[]` field on the provider record
+* New parameters: `-SkipTraceLogging` for the fast Manifest+MOF-only path, `-ScanPath <string[]>` to add custom directories to the TraceLogging scan
+* Snapshot `SchemaVersion` bumped to `1.1` (adds the `Sources[]` field; older readers that ignore unknown fields keep working)
 
 v1.1.0
 * Added `Export-EtwSnapshot` and `Compare-EtwSnapshot` for diffing provider state across machines or across Windows updates

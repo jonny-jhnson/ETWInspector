@@ -459,8 +459,10 @@ namespace EtwInspector.Provider.Enumeration
                                 break;
 
                             default:
-                                Console.WriteLine($"Warning: Unknown blobType: {blobType} at position 0x{memoryStream.Position:X}");
-                                break;
+                                // Unknown blob type means we've walked off the end
+                                // of the metadata stream into other file content.
+                                // Stop parsing and return what we've collected.
+                                return schema;
                         }
 
                         if (memoryStream.Position >= memoryStream.Length)
