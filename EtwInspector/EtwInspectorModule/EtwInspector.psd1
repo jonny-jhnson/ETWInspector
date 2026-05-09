@@ -12,7 +12,7 @@
 RootModule = 'EtwInspector.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.0'
+ModuleVersion = '1.2.0'
 
 # ID used to uniquely identify this module
 GUID = 'd63ab890-2557-4c12-8af4-a4366cc1536f'
@@ -66,9 +66,20 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
-1.0.0
-------
-Initial Module Creation
+v1.2.0
+* Export-EtwSnapshot now includes TraceLogging providers by default. Scans C:\Windows\System32 and C:\Windows\System32\drivers for the embedded ETW0 metadata, merges the same provider across the binaries it appears in, and records every source path on a new Sources[] field on the provider record
+* New parameters: -SkipTraceLogging for the fast Manifest+MOF-only path, -ScanPath <string[]> to add custom directories to the TraceLogging scan
+* Snapshot SchemaVersion bumped to 1.1 (adds the Sources[] field; older readers that ignore unknown fields keep working)
+
+v1.1.0
+* Added Export-EtwSnapshot and Compare-EtwSnapshot for diffing provider state across machines or across Windows updates
+* Snapshots support both pretty JSON (.json) and newline-delimited JSON (.ndjson / .jsonl); NDJSON diffs cleanly per provider and is ideal for stream-ingestion
+* Snapshot output is now deterministic - providers sorted by name, events sorted by (Id, Version) - so identical state produces byte-stable files
+* Sped up MOF provider enumeration by indexing .mof files once instead of per-provider
+
+v1.0.0
+* Initial release of package
+* Cmdlets: Get-EtwProviders, Get-EtwSecurityDescriptor, Get-EtwTraceSessions, Start-EtwCapture, Stop-EtwCapture
 '@
 
     } # End of PSData hashtable
