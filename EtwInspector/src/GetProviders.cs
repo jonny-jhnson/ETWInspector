@@ -50,6 +50,10 @@ namespace EtwInspector.Provider.Enumeration
         public List<byte> Extension { get; set; } = new List<byte>();
         public string EventName { get; set; }
         public List<FieldMetadata> Fields { get; set; } = new List<FieldMetadata>();
+        // Index into TraceLoggingSchema.Providers identifying which provider
+        // owns this event. The blob walker tracks the most-recently-seen
+        // provider blob; -1 means events appeared before any provider (orphans).
+        public int ProviderIndex { get; set; } = -1;
     }
 
     /// <summary>
@@ -392,7 +396,11 @@ namespace EtwInspector.Provider.Enumeration
         };
 
         /// <summary>
-        /// Looks for the "ETW0" signature; if found, parses the subsequent blob data.
+        /// Looks for "ETW0" signatures and parses every TraceLogging metadata
+        /// block in the file. Each event is tagged with the index of the
+        /// provider that owns it (the most-recently-seen provider blob in the
+        /// same stream, since TraceLogging metadata interleaves provider and
+        /// event blobs in declaration order).
         /// </summary>
         public static TraceLoggingSchema ParseTraceLoggingMetadata(string filePath)
         {
@@ -400,23 +408,62 @@ namespace EtwInspector.Provider.Enumeration
             var encoding = Encoding.GetEncoding(28591);
             var fileBytes = File.ReadAllBytes(fullPath);
 
-            using (var memoryStream = new MemoryStream(fileBytes))
-            using (var streamReader = new StreamReader(memoryStream, encoding))
-            {
-                // Convert entire file to a string to locate "ETW0"
-                var binaryString = streamReader.ReadToEnd();
-                var tlgSigValIndex = binaryString.IndexOf("ETW0", StringComparison.Ordinal);
-                if (tlgSigValIndex == -1)
-                {
-                    return null; // "ETW0" not found
-                }
+            // Find every "ETW0" occurrence - some binaries have multiple discrete
+            // metadata blocks. We try to parse each as its own TraceLogging block;
+            // if the magic doesn't validate, we skip it (false positive).
+            var offsets = FindAllOccurrences(fileBytes, new byte[] { 0x45, 0x54, 0x57, 0x30 });
+            if (offsets.Count == 0) return null;
 
-                // Position stream at "ETW0"
+            TraceLoggingSchema schema = null;
+            foreach (var offset in offsets)
+            {
+                var blockSchema = TryParseBlockAt(fileBytes, offset, fullPath, encoding);
+                if (blockSchema == null) continue;
+                if (schema == null)
+                {
+                    schema = blockSchema;
+                }
+                else
+                {
+                    // Merge subsequent blocks into the first schema. Re-base
+                    // ProviderIndex so events keep pointing at the right provider.
+                    int providerOffset = schema.Providers.Count;
+                    schema.Providers.AddRange(blockSchema.Providers);
+                    foreach (var e in blockSchema.Events)
+                    {
+                        if (e.ProviderIndex >= 0) e.ProviderIndex += providerOffset;
+                        schema.Events.Add(e);
+                    }
+                }
+            }
+            return schema;
+        }
+
+        private static List<int> FindAllOccurrences(byte[] haystack, byte[] needle)
+        {
+            var hits = new List<int>();
+            for (int i = 0; i <= haystack.Length - needle.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (haystack[i + j] != needle[j]) { match = false; break; }
+                }
+                if (match) hits.Add(i);
+            }
+            return hits;
+        }
+
+        private static TraceLoggingSchema TryParseBlockAt(byte[] fileBytes, int tlgSigValIndex, string fullPath, Encoding encoding)
+        {
+            using (var memoryStream = new MemoryStream(fileBytes))
+            {
                 memoryStream.Position = tlgSigValIndex;
                 using (var br = new BinaryReader(memoryStream, encoding))
                 {
                     // Verify the TraceLogging signature
                     var sigVal = Encoding.ASCII.GetString(br.ReadBytes(4));
+                    if (memoryStream.Position + 12 > memoryStream.Length) return null;
                     ushort size = br.ReadUInt16();
                     byte version = br.ReadByte();
                     byte flags = br.ReadByte();
@@ -424,10 +471,11 @@ namespace EtwInspector.Provider.Enumeration
 
                     if (size != 16 || magic != 13513619316402294406UL)
                     {
-                        return null; // Not a valid TraceLogging structure
+                        return null; // Coincidental ETW0 occurrence, not a TraceLogging block
                     }
 
                     var schema = new TraceLoggingSchema { FilePath = fullPath };
+                    int currentProviderIdx = -1;
 
                     // Read blob types until we hit 1 (_TlgBlobEnd)
                     byte blobType = br.ReadByte();
@@ -440,42 +488,46 @@ namespace EtwInspector.Provider.Enumeration
 
                             case 2: // _TlgBlobProvider
                                 schema.Providers.Add(ParseProviderBlob(br));
+                                currentProviderIdx = schema.Providers.Count - 1;
                                 break;
 
                             case 3: // _TlgBlobEvent3
-                                schema.Events.Add(ParseEvent3(br, tlgSigValIndex));
+                                {
+                                    var e = ParseEvent3(br, tlgSigValIndex);
+                                    e.ProviderIndex = currentProviderIdx;
+                                    schema.Events.Add(e);
+                                }
                                 break;
 
                             case 4: // _TlgBlobProvider3
                                 schema.Providers.Add(ParseProviderBlob3(br));
+                                currentProviderIdx = schema.Providers.Count - 1;
                                 break;
 
                             case 5: // _TlgBlobEvent2
-                                schema.Events.Add(ParseEvent2(br, tlgSigValIndex));
+                                {
+                                    var e = ParseEvent2(br, tlgSigValIndex);
+                                    e.ProviderIndex = currentProviderIdx;
+                                    schema.Events.Add(e);
+                                }
                                 break;
 
                             case 6: // _TlgBlobEvent4
-                                schema.Events.Add(ParseEvent4(br));
+                                {
+                                    var e = ParseEvent4(br);
+                                    e.ProviderIndex = currentProviderIdx;
+                                    schema.Events.Add(e);
+                                }
                                 break;
 
                             default:
-                                // Unknown blob type means we've walked off the end
-                                // of the metadata stream into other file content.
-                                // Stop parsing and return what we've collected.
+                                // Unknown blob type - we've walked off the end of
+                                // this metadata stream into other file content.
                                 return schema;
                         }
 
-                        if (memoryStream.Position >= memoryStream.Length)
-                            break;
-
-                        if (memoryStream.Position < memoryStream.Length)
-                        {
-                            blobType = br.ReadByte();
-                        }
-                        else
-                        {
-                            break;
-                        }
+                        if (memoryStream.Position >= memoryStream.Length) break;
+                        blobType = br.ReadByte();
                     }
 
                     return schema;

@@ -54,8 +54,33 @@ namespace EtwInspector.Provider.Enumeration
                 // its providers and emits events under them).
                 if (schema.Providers == null || schema.Providers.Count == 0) continue;
 
-                foreach (var provider in schema.Providers)
+                // Bucket events by the parser's per-event ProviderIndex. When
+                // events are tagged (provider-first layout), they route to the
+                // exact provider they belong to. When they're orphans (-1) -
+                // some binaries lay metadata out events-first, then providers,
+                // and the blob stream offers no explicit linkage in that case
+                // - we fall back to attributing them to every provider in the
+                // binary, matching the historical behavior. The dedup key
+                // prevents the same event from being added twice to one
+                // provider on subsequent merges from other binaries.
+                var eventsByIdx = new Dictionary<int, List<TraceLoggingEventMetadata>>();
+                if (schema.Events != null)
                 {
+                    foreach (var e in schema.Events)
+                    {
+                        if (!eventsByIdx.TryGetValue(e.ProviderIndex, out var list))
+                        {
+                            list = new List<TraceLoggingEventMetadata>();
+                            eventsByIdx[e.ProviderIndex] = list;
+                        }
+                        list.Add(e);
+                    }
+                }
+                eventsByIdx.TryGetValue(-1, out var orphanEvents);
+
+                for (int providerIdx = 0; providerIdx < schema.Providers.Count; providerIdx++)
+                {
+                    var provider = schema.Providers[providerIdx];
                     if (string.IsNullOrEmpty(provider.ProviderName)) continue;
 
                     var guid = NormalizeGuid(provider.ProviderGUID);
@@ -78,10 +103,23 @@ namespace EtwInspector.Provider.Enumeration
                     }
                     agg.Sources.Add(file);
 
-                    // Attribute every event in this binary to this provider.
-                    if (schema.Events != null)
+                    // Attributable events first
+                    if (eventsByIdx.TryGetValue(providerIdx, out var providerEvents))
                     {
-                        foreach (var e in schema.Events)
+                        foreach (var e in providerEvents)
+                        {
+                            var key = EventDedupKey(e);
+                            if (agg.SeenEventKeys.Add(key))
+                            {
+                                agg.Events.Add(ToEventSnapshot(e));
+                            }
+                        }
+                    }
+                    // Then orphan events from this binary, attributed to every
+                    // provider here. Dedup prevents duplicates within a provider.
+                    if (orphanEvents != null)
+                    {
+                        foreach (var e in orphanEvents)
                         {
                             var key = EventDedupKey(e);
                             if (agg.SeenEventKeys.Add(key))
