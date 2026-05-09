@@ -128,6 +128,8 @@ The snapshot captures the OS version (`Major.Minor.Build.UBR`, read from the reg
 
 > **TraceLogging events are listed under every provider in the binary, not bound to a specific one.** The ETW0 metadata blob doesn't carry per-event provider IDs, so when a binary declares multiple TraceLogging providers all of them report the binary's full event list in the snapshot. To get a real per-event binding, do static analysis on the binary - [TLGMapper](https://github.com/AsuNa-jp/TLGMapper) is an IDA plugin that walks `TraceLoggingWrite` call sites and recovers the actual mapping.
 
+> **Same name, different GUIDs.** TraceLogging provider identity in the snapshot is the GUID, not the name. The runtime normally derives the GUID deterministically from the upper-cased name (per the TraceLogging spec), but a developer can explicitly override it in `TRACELOGGING_DEFINE_PROVIDER`. When that happens you'll see multiple entries with the same `ProviderName` and different `ProviderGuid` values, each with its own `Sources[]` and events. Real example: `RDP` has four different GUIDs in System32 across different binaries.
+
 #### Compare-EtwSnapshot
 Loads two snapshots (A and B) and returns a structured diff. Both `.json` and `.ndjson`/`.jsonl` are accepted — and the two paths can use different formats (e.g. compare a legacy `.json` baseline against a new `.ndjson` snapshot).
 
