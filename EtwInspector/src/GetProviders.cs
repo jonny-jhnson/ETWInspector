@@ -28,6 +28,9 @@ namespace EtwInspector.Provider.Enumeration
 
     /// <summary>
     /// Holds parsed provider info (to avoid name collision with System.Diagnostics.Eventing.Reader.ProviderMetadata).
+    /// Events live on TraceLoggingSchema, not here, because the ETW0 blob
+    /// doesn't carry per-event provider IDs - we cannot honestly say which
+    /// provider in a multi-provider binary owns a given event.
     /// </summary>
     public class TraceLoggingProviderMetadata
     {
@@ -392,7 +395,13 @@ namespace EtwInspector.Provider.Enumeration
         };
 
         /// <summary>
-        /// Looks for the "ETW0" signature; if found, parses the subsequent blob data.
+        /// Looks for "ETW0" signatures and parses every TraceLogging metadata
+        /// block in the file. Returns a schema with a flat Providers list and
+        /// a flat Events list. We deliberately do not try to bind events to
+        /// individual providers - in practice every shipping Windows binary
+        /// surveyed lays the blob stream out events-first, then providers, so
+        /// per-event linkage is not recoverable from the stream. Use static
+        /// analysis (e.g. the TLGMapper IDA plugin) for real attribution.
         /// </summary>
         public static TraceLoggingSchema ParseTraceLoggingMetadata(string filePath)
         {
@@ -400,23 +409,55 @@ namespace EtwInspector.Provider.Enumeration
             var encoding = Encoding.GetEncoding(28591);
             var fileBytes = File.ReadAllBytes(fullPath);
 
-            using (var memoryStream = new MemoryStream(fileBytes))
-            using (var streamReader = new StreamReader(memoryStream, encoding))
-            {
-                // Convert entire file to a string to locate "ETW0"
-                var binaryString = streamReader.ReadToEnd();
-                var tlgSigValIndex = binaryString.IndexOf("ETW0", StringComparison.Ordinal);
-                if (tlgSigValIndex == -1)
-                {
-                    return null; // "ETW0" not found
-                }
+            // Find every "ETW0" occurrence - some binaries have multiple discrete
+            // metadata blocks. We try to parse each as its own TraceLogging block;
+            // if the magic doesn't validate, we skip it (false positive).
+            var offsets = FindAllOccurrences(fileBytes, new byte[] { 0x45, 0x54, 0x57, 0x30 });
+            if (offsets.Count == 0) return null;
 
-                // Position stream at "ETW0"
+            TraceLoggingSchema schema = null;
+            foreach (var offset in offsets)
+            {
+                var blockSchema = TryParseBlockAt(fileBytes, offset, fullPath, encoding);
+                if (blockSchema == null) continue;
+                if (schema == null)
+                {
+                    schema = blockSchema;
+                }
+                else
+                {
+                    schema.Providers.AddRange(blockSchema.Providers);
+                    schema.Events.AddRange(blockSchema.Events);
+                }
+            }
+            return schema;
+        }
+
+        private static List<int> FindAllOccurrences(byte[] haystack, byte[] needle)
+        {
+            var hits = new List<int>();
+            for (int i = 0; i <= haystack.Length - needle.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (haystack[i + j] != needle[j]) { match = false; break; }
+                }
+                if (match) hits.Add(i);
+            }
+            return hits;
+        }
+
+        private static TraceLoggingSchema TryParseBlockAt(byte[] fileBytes, int tlgSigValIndex, string fullPath, Encoding encoding)
+        {
+            using (var memoryStream = new MemoryStream(fileBytes))
+            {
                 memoryStream.Position = tlgSigValIndex;
                 using (var br = new BinaryReader(memoryStream, encoding))
                 {
                     // Verify the TraceLogging signature
                     var sigVal = Encoding.ASCII.GetString(br.ReadBytes(4));
+                    if (memoryStream.Position + 12 > memoryStream.Length) return null;
                     ushort size = br.ReadUInt16();
                     byte version = br.ReadByte();
                     byte flags = br.ReadByte();
@@ -424,7 +465,7 @@ namespace EtwInspector.Provider.Enumeration
 
                     if (size != 16 || magic != 13513619316402294406UL)
                     {
-                        return null; // Not a valid TraceLogging structure
+                        return null; // Coincidental ETW0 occurrence, not a TraceLogging block
                     }
 
                     var schema = new TraceLoggingSchema { FilePath = fullPath };
@@ -459,21 +500,13 @@ namespace EtwInspector.Provider.Enumeration
                                 break;
 
                             default:
-                                Console.WriteLine($"Warning: Unknown blobType: {blobType} at position 0x{memoryStream.Position:X}");
-                                break;
+                                // Unknown blob type - we've walked off the end of
+                                // this metadata stream into other file content.
+                                return schema;
                         }
 
-                        if (memoryStream.Position >= memoryStream.Length)
-                            break;
-
-                        if (memoryStream.Position < memoryStream.Length)
-                        {
-                            blobType = br.ReadByte();
-                        }
-                        else
-                        {
-                            break;
-                        }
+                        if (memoryStream.Position >= memoryStream.Length) break;
+                        blobType = br.ReadByte();
                     }
 
                     return schema;
